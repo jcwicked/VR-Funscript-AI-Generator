@@ -44,6 +44,9 @@ class GlobalState:
         self.frame_area = 0
         self.image_y_size = 0
         self.image_x_size = 0
+        # Processing State
+        self.should_stop = False
+        self.processing_start_time = None
         # Attributes
         self.isVR = True
         self.reference_script = ""
@@ -639,8 +642,9 @@ def common_initialization():
         global_state.isVR = False
 
     global_state.enhance_lighting = enhance_lighting_var.get()
-    global_state.frame_start = 0 if frame_start_entry.get() == "" else int(frame_start_entry.get())
-    global_state.frame_end = None if frame_end_entry.get() == "" else int(frame_end_entry.get())
+    # Initialize frame start and end to defaults since we removed the entry fields
+    global_state.frame_start = 0
+    global_state.frame_end = None
     global_state.reference_script = reference_script_path.get()
     global_state.enhance_lighting = enhance_lighting_var.get()
 
@@ -679,16 +683,27 @@ def process_video(video_file, funscript_path, progress_callback, complete_callba
     try:
         # Set up the global state for this video
         global_state.video_file = video_file
+        global_state.processing_start_time = time.time()
         
         # Initialize common settings
         common_initialization()
         
+        # Check if processing should stop
+        if global_state.should_stop:
+            complete_callback()
+            return
+            
         # Initialize the debugger
         global_state.debugger = Debugger(global_state.video_file, output_dir=global_state.video_file[:-4])
         
         # Run YOLO detection and save result to _rawyolo.json file
-        extract_yolo_data(lambda current, total, eta: progress_callback((current / total) * 100, "yolo"))
+        extract_yolo_data(progress_callback)
         
+        # Check if processing should stop
+        if global_state.should_stop:
+            complete_callback()
+            return
+            
         # Load YOLO detection results from file
         yolo_data = load_yolo_data_from_file(global_state.video_file[:-4] + "_rawyolo.json")
         
@@ -711,13 +726,23 @@ def process_video(video_file, funscript_path, progress_callback, complete_callba
         
         global_state.logger.info(f"Frame Start adjusted to: {global_state.frame_start}")
         
+        # Check if processing should stop
+        if global_state.should_stop:
+            complete_callback()
+            return
+            
         # Perform tracking analysis and generate raw funscript data
         global_state.funscript_data = analyze_tracking_results(
             results, 
             global_state.image_y_size,
-            lambda current, total, eta: progress_callback((current / total) * 100, "tracking")
+            progress_callback
         )
         
+        # Check if processing should stop
+        if global_state.should_stop:
+            complete_callback()
+            return
+            
         # Save debug logs if in debug mode
         if global_state.DebugMode:
             global_state.debugger.save_logs()
@@ -902,7 +927,7 @@ yolo_progress_label = ttk.Label(processing_frame, text="YOLO Detection Progress:
 yolo_progress_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
 yolo_progress_bar = ttk.Progressbar(processing_frame, orient="horizontal", length=300, mode="determinate")
 yolo_progress_bar.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-yolo_progress_percent = ttk.Label(processing_frame, text="0%")
+yolo_progress_percent = ttk.Label(processing_frame, text="0%", width=20, anchor="w")
 yolo_progress_percent.grid(row=1, column=2, padx=5, pady=5, sticky="w")
 
 # Progress Bar for Tracking Analysis
@@ -910,157 +935,46 @@ tracking_progress_label = ttk.Label(processing_frame, text="Tracking Analysis Pr
 tracking_progress_label.grid(row=2, column=0, padx=5, pady=5, sticky="w")
 tracking_progress_bar = ttk.Progressbar(processing_frame, orient="horizontal", length=300, mode="determinate")
 tracking_progress_bar.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-tracking_progress_percent = ttk.Label(processing_frame, text="0%")
+tracking_progress_percent = ttk.Label(processing_frame, text="0%", width=20, anchor="w")
 tracking_progress_percent.grid(row=2, column=2, padx=5, pady=5, sticky="w")
 
-# Frame Range (Collapsible)
-optional_settings = ttk.LabelFrame(root, text="Optional settings", padding=(10, 5))
-optional_settings.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+# Current Processing Status
+current_file_frame = ttk.Frame(processing_frame)
+current_file_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
 
-# Collapse/Expand Button
-def toggle_optional_settings():
-    if optional_settings_collapsible.winfo_ismapped():
-        optional_settings_collapsible.grid_remove()
-    else:
-        optional_settings_collapsible.grid()
+current_file_label = ttk.Label(current_file_frame, text="Current File:")
+current_file_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 
-toggle_button = ttk.Button(optional_settings, text="Toggle Optional Settings", command=toggle_optional_settings)
-toggle_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-
-# Collapsible Section
-optional_settings_collapsible = ttk.Frame(optional_settings)
-optional_settings_collapsible.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-
-ttk.Label(optional_settings_collapsible, text="Frame Start:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-frame_start_entry = ttk.Entry(optional_settings_collapsible, width=10)
-frame_start_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-
-ttk.Label(optional_settings_collapsible, text="Frame End:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-frame_end_entry = ttk.Entry(optional_settings_collapsible, width=10)
-frame_end_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-
-ttk.Label(optional_settings_collapsible, text="Reference Script:").grid(row=2, column=0, padx=5, pady=5)
-ttk.Entry(optional_settings_collapsible, textvariable=reference_script_path, width=50).grid(row=2, column=1, padx=5, pady=5)
-ttk.Button(optional_settings_collapsible, text="Browse", command=select_reference_script).grid(row=2, column=2, padx=5, pady=5)
-
-optional_settings_collapsible.grid_remove()
-
-# Funscript Tweaking Section (Collapsible)
-funscript_tweaking_frame = ttk.LabelFrame(root, text="Funscript Tweaking", padding=(10, 5))
-funscript_tweaking_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-
-# Collapse/Expand Button
-def toggle_funscript_tweaking():
-    if funscript_tweaking_collapsible.winfo_ismapped():
-        funscript_tweaking_collapsible.grid_remove()
-    else:
-        funscript_tweaking_collapsible.grid()
-
-toggle_button = ttk.Button(funscript_tweaking_frame, text="Toggle Funscript Tweaking", command=toggle_funscript_tweaking)
-toggle_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-
-# Collapsible Section
-funscript_tweaking_collapsible = ttk.Frame(funscript_tweaking_frame)
-funscript_tweaking_collapsible.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-
-# Boost Settings
-boost_frame = ttk.LabelFrame(funscript_tweaking_collapsible, text="Boost Settings", padding=(10, 5))
-boost_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
-
-boost_checkbox = ttk.Checkbutton(boost_frame, text="Enable Boost", variable=boost_enabled_var, command=lambda: setattr(global_state, 'boost_enabled', not global_state.boost_enabled))
-boost_checkbox.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-boost_enabled_var.set(global_state.boost_enabled)
-
-ttk.Label(boost_frame, text="Boost Up %:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-boost_up_selector = ttk.Combobox(boost_frame, values=[str(i) for i in range(0, 21)], width=5)
-boost_up_selector.set(str(global_state.boost_up_percent))
-boost_up_selector.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-boost_up_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'boost_up_percent', int(boost_up_selector.get())))
-
-ttk.Label(boost_frame, text="Reduce Down %:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-boost_down_selector = ttk.Combobox(boost_frame, values=[str(i) for i in range(0, 21)], width=5)
-boost_down_selector.set(str(global_state.boost_down_percent))
-boost_down_selector.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-boost_down_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'boost_down_percent', int(boost_down_selector.get())))
-
-# Threshold Settings
-threshold_frame = ttk.LabelFrame(funscript_tweaking_collapsible, text="Threshold Settings", padding=(10, 5))
-threshold_frame.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-
-threshold_checkbox = ttk.Checkbutton(threshold_frame, text="Enable Threshold", variable=threshold_enabled_var, command=lambda: setattr(global_state, 'threshold_enabled', not global_state.threshold_enabled))
-threshold_checkbox.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-threshold_enabled_var.set(global_state.threshold_enabled)
-
-ttk.Label(threshold_frame, text="0 Threshold:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-threshold_low_selector = ttk.Combobox(threshold_frame, values=[str(i) for i in range(0, 16)], width=5)
-threshold_low_selector.set(str(global_state.threshold_low))
-threshold_low_selector.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-threshold_low_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'threshold_low', int(threshold_low_selector.get())))
-
-ttk.Label(threshold_frame, text="100 Threshold:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-threshold_high_selector = ttk.Combobox(threshold_frame, values=[str(i) for i in range(80, 101)], width=5)
-threshold_high_selector.set(str(global_state.threshold_high))
-threshold_high_selector.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-threshold_high_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'threshold_high', int(threshold_high_selector.get())))
-
-# Simplification Settings
-vw_frame = ttk.LabelFrame(funscript_tweaking_collapsible, text="Simplification", padding=(10, 5))
-vw_frame.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
-
-vw_checkbox = ttk.Checkbutton(vw_frame, text="Enable Simplification", variable=vw_simplification_enabled_var, command=lambda: setattr(global_state, 'vw_simplification_enabled', not global_state.vw_simplification_enabled))
-vw_checkbox.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-vw_simplification_enabled_var.set(global_state.vw_simplification_enabled)
-
-ttk.Label(vw_frame, text="VW Factor:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-vw_factor_selector = ttk.Combobox(vw_frame, values=[str(i / 5) for i in range(10, 51)], width=5)
-vw_factor_selector.set(str(global_state.vw_factor))
-vw_factor_selector.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-vw_factor_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'vw_factor', float(vw_factor_selector.get())))
-
-ttk.Label(vw_frame, text="Rounding:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-rounding = ttk.Combobox(vw_frame, values=['5', '10'], width=5)
-rounding.set(str(global_state.rounding))
-rounding.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-rounding.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'rounding', float(rounding.get())))
-
-# Regenerate Funscript Button
-regenerate_funscript_button = ttk.Button(funscript_tweaking_collapsible, text="Regenerate Funscript", command=lambda: regenerate_funscript(global_state))
-regenerate_funscript_button.grid(row=2, column=0, padx=5, pady=5, sticky="w")
-
-funscript_tweaking_collapsible.grid_remove()
-
-# Debug Record Mode
-debug_frame = ttk.LabelFrame(root, text="Debugging (Replay and navigate a processed video)", padding=(10, 5))
-debug_frame.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-
-quit_button = ttk.Button(debug_frame, text="Video (q to quit)", command=debug_function)
-quit_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-
-ttk.Checkbutton(debug_frame, text="Save debugging session as video", variable=debug_record_mode_var).grid(row=0, column=1, padx=5, pady=5)
-
-# Duration Selector
-duration_combobox = ttk.Combobox(debug_frame, textvariable=debug_record_duration_var, values=["5", "10", "20"], width=5)
-duration_combobox.grid(row=0, column=2, padx=5, pady=5)
-ttk.Label(debug_frame, text="seconds").grid(row=0, column=3, padx=5, pady=5)
+current_file_status = ttk.Label(current_file_frame, text="None", wraplength=400)
+current_file_status.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
 # Batch Processing Section
 batch_frame = ttk.LabelFrame(root, text="Batch Processing", padding=(10, 5))
 batch_frame.grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
 
-# Create a frame for the buttons
+# Overall Batch Progress
+batch_overall_frame = ttk.Frame(batch_frame)
+batch_overall_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+batch_progress_label = ttk.Label(batch_overall_frame, text="Overall Batch Progress:")
+batch_progress_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
+batch_count_label = ttk.Label(batch_overall_frame, text="0/0 files processed")
+batch_count_label.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+# Create a frame for the batch buttons
 batch_button_frame = ttk.Frame(batch_frame)
 batch_button_frame.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
 
 def add_files():
     files = filedialog.askopenfilenames(
         title="Select video files",
-        filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mkv")],
+        filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mkv")]
     )
     for file in files:
-        abs_path = os.path.abspath(file)
-        if abs_path not in global_state.batch_queue:
-            global_state.batch_queue.append(abs_path)
-            global_state.batch_status[abs_path] = "Queued"
+        if file not in global_state.batch_queue:
+            global_state.batch_queue.append(file)
+            global_state.batch_status[file] = "Queued"
             update_batch_list()
 
 def remove_selected():
@@ -1078,11 +992,18 @@ def clear_queue():
     update_batch_list()
 
 def update_batch_list():
+    """Update the batch listbox with simple status."""
     batch_listbox.delete(0, tk.END)
     for file in global_state.batch_queue:
         status = global_state.batch_status.get(file, "Unknown")
         filename = os.path.basename(file)
-        batch_listbox.insert(tk.END, f"{filename} - {status}")
+        batch_listbox.insert(tk.END, f"{filename} [{status}]")
+
+def stop_batch():
+    global_state.should_stop = True
+    batch_stop_button.configure(state="disabled")
+    batch_start_button.configure(state="normal")
+    messagebox.showinfo("Processing", "Stopping after current file completes...")
 
 def start_batch():
     if not global_state.batch_queue:
@@ -1090,24 +1011,53 @@ def start_batch():
         return
     
     if not global_state.batch_processing:
+        global_state.should_stop = False
         global_state.batch_processing = True
+        batch_start_button.configure(state="disabled")
+        batch_stop_button.configure(state="normal")
         process_next_in_queue()
 
 def process_next_in_queue():
-    if not global_state.batch_processing or not global_state.batch_queue:
+    if global_state.should_stop or not global_state.batch_processing or not global_state.batch_queue:
         global_state.batch_processing = False
+        global_state.should_stop = False
+        batch_start_button.configure(state="normal")
+        batch_stop_button.configure(state="disabled")
+        # Reset progress bars
+        yolo_progress_bar["value"] = 0
+        tracking_progress_bar["value"] = 0
+        yolo_progress_percent.config(text="0%")
+        tracking_progress_percent.config(text="0%")
+        batch_count_label.config(text="0/0 files processed")
+        if global_state.should_stop:
+            messagebox.showinfo("Complete", "Batch processing stopped")
+        else:
+            messagebox.showinfo("Complete", "Batch processing complete")
         return
 
     global_state.current_batch_index += 1
     if global_state.current_batch_index >= len(global_state.batch_queue):
         global_state.current_batch_index = -1
         global_state.batch_processing = False
+        batch_start_button.configure(state="normal")
+        batch_stop_button.configure(state="disabled")
+        # Reset progress bars
+        yolo_progress_bar["value"] = 0
+        tracking_progress_bar["value"] = 0
+        yolo_progress_percent.config(text="0%")
+        tracking_progress_percent.config(text="0%")
+        batch_count_label.config(text="0/0 files processed")
         messagebox.showinfo("Complete", "Batch processing complete")
         return
 
     current_file = global_state.batch_queue[global_state.current_batch_index]
-    global_state.batch_status[current_file] = "Processing"
+    global_state.batch_status[current_file] = "Starting..."
     update_batch_list()
+    
+    # Update batch progress count
+    current_count = global_state.current_batch_index + 1
+    total_count = len(global_state.batch_queue)
+    batch_count_label.config(text=f"{current_count}/{total_count} files processed")
     
     # Set the current file as the video path
     video_path.set(current_file)
@@ -1119,13 +1069,16 @@ def process_next_in_queue():
 ttk.Button(batch_button_frame, text="Add Files", command=add_files).grid(row=0, column=0, padx=5, pady=5)
 ttk.Button(batch_button_frame, text="Remove Selected", command=remove_selected).grid(row=0, column=1, padx=5, pady=5)
 ttk.Button(batch_button_frame, text="Clear Queue", command=clear_queue).grid(row=0, column=2, padx=5, pady=5)
-ttk.Button(batch_button_frame, text="Start Batch", command=start_batch).grid(row=0, column=3, padx=5, pady=5)
+batch_start_button = ttk.Button(batch_button_frame, text="Start Batch", command=start_batch)
+batch_start_button.grid(row=0, column=3, padx=5, pady=5)
+batch_stop_button = ttk.Button(batch_button_frame, text="Stop Batch", command=stop_batch, state="disabled")
+batch_stop_button.grid(row=0, column=4, padx=5, pady=5)
 
 # Create and configure the listbox with scrollbar
 batch_list_frame = ttk.Frame(batch_frame)
 batch_list_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
 
-batch_listbox = tk.Listbox(batch_list_frame, height=6, selectmode=tk.EXTENDED)
+batch_listbox = tk.Listbox(batch_list_frame, height=6, selectmode=tk.EXTENDED, font=("Courier", 10))
 batch_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 scrollbar = ttk.Scrollbar(batch_list_frame, orient=tk.VERTICAL, command=batch_listbox.yview)
@@ -1161,18 +1114,51 @@ ttk.Button(button_frame, text="Quit", command=quit_application).grid(row=0, colu
 footer_label = ttk.Label(root, text="Individual and personal use only.\nNot for commercial use.\nk00gar 2025 - https://github.com/ack00gar", font=("Arial", 10, "italic", "bold"), justify="center")
 footer_label.grid(row=7, column=0, columnspan=3, padx=5, pady=5)
 
+def format_time(seconds):
+    """Convert seconds to human readable time format."""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        minutes = int(seconds / 60)
+        seconds = int(seconds % 60)
+        return f"{minutes}m {seconds}s"
+    else:
+        hours = int(seconds / 3600)
+        minutes = int((seconds % 3600) / 60)
+        return f"{hours}h {minutes}m"
+
 def update_progress(progress, stage):
     """Update the progress bars and status labels based on the current processing stage."""
+    # Calculate time estimation
+    time_str = ""
+    if global_state.processing_start_time is not None and progress > 0:
+        elapsed_time = time.time() - global_state.processing_start_time
+        estimated_total = elapsed_time / (progress / 100)
+        remaining_time = estimated_total - elapsed_time
+        time_str = f"ETA: {format_time(remaining_time)}"
+
     if stage == "yolo":
         yolo_progress_bar["value"] = progress
-        yolo_progress_percent.config(text=f"{progress:.0f}%")
+        yolo_progress_percent.config(text=f"{progress:.0f}% - {time_str}")
+        tracking_progress_bar["value"] = 0
+        tracking_progress_percent.config(text="0%")
     elif stage == "tracking":
         tracking_progress_bar["value"] = progress
-        tracking_progress_percent.config(text=f"{progress:.0f}%")
+        tracking_progress_percent.config(text=f"{progress:.0f}% - {time_str}")
     
     if global_state.batch_processing:
         current_file = global_state.batch_queue[global_state.current_batch_index]
-        global_state.batch_status[current_file] = f"Processing ({progress:.0f}%)"
+        current_count = global_state.current_batch_index + 1
+        total_count = len(global_state.batch_queue)
+        batch_count_label.config(text=f"{current_count}/{total_count} files processed")
+        
+        # Update current file status
+        filename = os.path.basename(current_file)
+        stage_text = "YOLO Detection" if stage == "yolo" else "Tracking Analysis"
+        current_file_status.config(text=f"{filename}\n{stage_text} ({progress:.0f}%)")
+        
+        # Update simple status in list
+        global_state.batch_status[current_file] = "Processing"
         update_batch_list()
     
     root.update_idletasks()
