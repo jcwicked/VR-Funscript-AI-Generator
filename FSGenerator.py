@@ -9,6 +9,7 @@ import platform  # For identifying the operating system
 import torch  # PyTorch for use of .pt model if not on Apple device
 import tkinter as tk  # GUI library for macOS for basic use in our case
 from tkinter import filedialog, messagebox, ttk  # here, what was I saying...
+from tkinterdnd2 import DND_FILES, TkinterDnD
 import threading
 from datetime import datetime
 import logging
@@ -69,6 +70,11 @@ class GlobalState:
         self.vw_simplification_enabled = True
         self.vw_factor = 8.0
         self.rounding = 5
+        # Batch Processing Variables
+        self.batch_queue = []  # List to store queued video files
+        self.batch_status = {}  # Dictionary to store status of each file
+        self.current_batch_index = -1  # Index of currently processing file
+        self.batch_processing = False  # Whether batch processing is active
         # Configure logging (simple setup)
         # Initialize logger
         logging.basicConfig(
@@ -201,6 +207,7 @@ def get_yolo_model_path():
 def extract_yolo_data(progress_callback=None):
     """
     Extract YOLO detection data from a video.
+    Progress updates now use the consolidated update_progress function.
     """
     if os.path.exists(global_state.video_file[:-4] + f"_rawyolo.json"):
         # messagebox to ask if user wants to overwrite or reuse
@@ -342,13 +349,10 @@ def extract_yolo_data(progress_callback=None):
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
-        # Update progress
+        # Update progress using the consolidated progress callback
         if progress_callback:
-            elapsed_time = time.time() - start_time
-            frames_processed = frame_pos - global_state.frame_start + 1
-            frames_remaining = last_frame - frame_pos - 1
-            eta = (elapsed_time / frames_processed) * frames_remaining if frames_processed > 0 else 0
-            progress_callback(frame_pos, last_frame, time.strftime("%H:%M:%S", time.gmtime(eta)))
+            progress = ((frame_pos - global_state.frame_start) / (last_frame - global_state.frame_start)) * 100
+            progress_callback(progress, "yolo")
 
     # Write the detection records to a JSON file
     write_dataset(global_state.video_file[:-4] + f"_rawyolo.json", records)
@@ -386,9 +390,12 @@ def make_data_boxes(records, image_x_size):
 def analyze_tracking_results(results, image_y_size, progress_callback=None):
     """
     Analyze tracking results and generate Funscript data.
-    :param results: The Result object containing detection data.
-    :param image_y_size: Height of the image/frame.
-    :return: A list of Funscript data.
+    Progress updates now use the consolidated update_progress function.
+    
+    Args:
+        results: The Result object containing detection data.
+        image_y_size: Height of the image/frame.
+        progress_callback: Callback function for progress updates using the consolidated system.
     """
     list_of_frames = results.get_all_frame_ids()  # Get all frame IDs with detections
     visualizer = Visualizer()  # Initialize the visualizer
@@ -434,8 +441,7 @@ def analyze_tracking_results(results, image_y_size, progress_callback=None):
     global_state.funscript_frames = []  # List to store Funscript frames
     tracker = ObjectTracker(global_state)
 
-    # Start time for ETA calculation
-    start_time = time.time()
+    total_frames = global_state.frame_end - global_state.frame_start
 
     for frame_pos in tqdm(range(global_state.frame_start, global_state.frame_end), unit="f"):
         global_state.current_frame_id = frame_pos
@@ -488,7 +494,6 @@ def analyze_tracking_results(results, image_y_size, progress_callback=None):
                                    bounding_boxes=bounding_boxes,
                                    variables={
                                        'frame': frame_pos,
-                                       # time of the frame hh:mm:ss
                                        'time': datetime.fromtimestamp(frame_pos / fps).strftime('%H:%M:%S'),
                                        'distance': tracker.distance,
                                        'Penetration': tracker.penetration,
@@ -535,13 +540,10 @@ def analyze_tracking_results(results, image_y_size, progress_callback=None):
             cv2.imshow("Combined Results", frame_display)
             cv2.waitKey(1)
 
-        # Update progress
+        # Update progress using the consolidated progress callback
         if progress_callback:
-            elapsed_time = time.time() - start_time
-            frames_processed = frame_pos - global_state.frame_start + 1
-            frames_remaining = global_state.frame_end - frame_pos - 1
-            eta = (elapsed_time / frames_processed) * frames_remaining if frames_processed > 0 else 0
-            progress_callback(frame_pos, global_state.frame_end, time.strftime("%H:%M:%S", time.gmtime(eta)))
+            progress = ((frame_pos - global_state.frame_start) / total_frames) * 100
+            progress_callback(progress, "tracking")
 
     # Prepare Funscript data
     global_state.funscript_data = list(zip(global_state.funscript_frames, global_state.funscript_distances))
@@ -664,70 +666,127 @@ def common_initialization():
     global_state.logger.info(f"Video Reader: {global_state.video_reader}")
     global_state.logger.info(f"Enhance lighting: {global_state.enhance_lighting}")
 
-def start_processing():
-    common_initialization()
-
-    # Initialize the debugger
-    global_state.debugger = Debugger(global_state.video_file, output_dir=global_state.video_file[:-4])
-
-    # YOLO Detection Progress
-    def update_yolo_progress(current_frame, total_frames, eta):
-        progress = (current_frame / total_frames) * 100
-
-        def update_gui():
-            yolo_progress_bar["value"] = progress
-            yolo_progress_percent.config(text=f"{progress:.0f}% - ETA: {eta}")
-
-        # Schedule the update in the main thread
-        root.after(0, update_gui)
-
-    # Tracking Analysis Progress
-    def update_tracking_progress(current_frame, total_frames, eta):
-        progress = (current_frame / total_frames) * 100
-        tracking_progress_bar["value"] = progress
-        tracking_progress_percent.config(text=f"{progress:.0f}% - ETA: {eta}")
-        root.update_idletasks()
-
-    # Function to run the processing tasks
-    def run_processing():
-        # Run the YOLO detection and save result to _rawyolo.json file
-        extract_yolo_data(update_yolo_progress)
-
+def process_video(video_file, funscript_path, progress_callback, complete_callback):
+    """
+    Process a video file to generate a funscript.
+    
+    Args:
+        video_file: Path to the video file
+        funscript_path: Path where the funscript will be saved
+        progress_callback: Callback function for progress updates
+        complete_callback: Callback function when processing is complete
+    """
+    try:
+        # Set up the global state for this video
+        global_state.video_file = video_file
+        
+        # Initialize common settings
+        common_initialization()
+        
+        # Initialize the debugger
+        global_state.debugger = Debugger(global_state.video_file, output_dir=global_state.video_file[:-4])
+        
+        # Run YOLO detection and save result to _rawyolo.json file
+        extract_yolo_data(lambda current, total, eta: progress_callback((current / total) * 100, "yolo"))
+        
         # Load YOLO detection results from file
-        yolo_data = load_yolo_data_from_file(global_state.video_file[:-4] + f"_rawyolo.json")
-
+        yolo_data = load_yolo_data_from_file(global_state.video_file[:-4] + "_rawyolo.json")
+        
+        # Convert YOLO data to box format
         results = make_data_boxes(yolo_data, global_state.image_x_size)
-
-        # Looking for the first instance of penis within the YOLO results
+        
+        # Find first instance of penis
         first_penis_frame = parse_yolo_data_looking_for_penis(yolo_data, 0)
-
+        
         if first_penis_frame is None:
             global_state.logger.error(f"No penis found in video: {global_state.video_file}")
             first_penis_frame = 0
-
-        # Deciding whether we start from there or from a user-specified later frame
-        global_state.frame_start = max(max(first_penis_frame - int(global_state.video_fps), global_state.frame_start - int(global_state.video_fps)), 0)
-
+            
+        # Adjust frame start
+        global_state.frame_start = max(
+            max(first_penis_frame - int(global_state.video_fps), 
+                global_state.frame_start - int(global_state.video_fps)), 
+            0
+        )
+        
         global_state.logger.info(f"Frame Start adjusted to: {global_state.frame_start}")
-
-        # Performing the tracking part and generation of the raw funscript data
-        global_state.funscript_data = analyze_tracking_results(results, global_state.image_y_size, update_tracking_progress)
-
-        global_state.debugger.save_logs()
-
+        
+        # Perform tracking analysis and generate raw funscript data
+        global_state.funscript_data = analyze_tracking_results(
+            results, 
+            global_state.image_y_size,
+            lambda current, total, eta: progress_callback((current / total) * 100, "tracking")
+        )
+        
+        # Save debug logs if in debug mode
+        if global_state.DebugMode:
+            global_state.debugger.save_logs()
+        
+        # Generate the funscript
         funscript_handler = FunscriptGenerator()
-
-        # Simplifying the funscript data and generating the file
         funscript_handler.generate(global_state)
-
-        # Optionally, compare generated funscript with reference funscript if specified, or a simple generic report
+        
+        # Create report if reference script exists
         funscript_handler.create_report_funscripts(global_state)
-
+        
         global_state.logger.info(f"Finished processing video: {global_state.video_file}")
+        
+        # Call the completion callback
+        complete_callback()
+        
+    except Exception as e:
+        global_state.logger.error(f"Error in process_video: {str(e)}")
+        messagebox.showerror("Error", f"Error processing video: {str(e)}")
+        complete_callback()  # Still call complete_callback to ensure proper cleanup
 
-    # Run the processing in a separate thread
-    processing_thread = threading.Thread(target=run_processing)
-    processing_thread.start()
+def start_processing():
+    """
+    Start processing a video file. This function has been simplified to use the process_video function
+    which now contains the core processing logic. This avoids code duplication and centralizes the 
+    processing workflow.
+    """
+    if not video_path.get():
+        messagebox.showerror("Error", "Please select a video file first")
+        if global_state.batch_processing:
+            process_next_in_queue()
+        return
+
+    # Disable the start button during processing
+    start_button.configure(state="disabled")
+    
+    try:
+        # Create output directory if it doesn't exist
+        output_dir = os.path.join(os.path.dirname(video_path.get()), "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Get the base filename without extension
+        base_filename = os.path.splitext(os.path.basename(video_path.get()))[0]
+        
+        # Create the funscript file path
+        funscript_path = os.path.join(output_dir, f"{base_filename}.funscript")
+        
+        # Start processing in a separate thread
+        processing_thread = threading.Thread(
+            target=process_video,
+            args=(video_path.get(), funscript_path, update_progress, processing_complete)
+        )
+        processing_thread.start()
+        
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to start processing: {str(e)}")
+        start_button.configure(state="normal")
+        if global_state.batch_processing:
+            process_next_in_queue()
+
+def processing_complete():
+    start_button.configure(state="normal")
+    if global_state.batch_processing:
+        current_file = global_state.batch_queue[global_state.current_batch_index]
+        global_state.batch_status[current_file] = "Complete"
+        update_batch_list()
+        process_next_in_queue()
+    else:
+        messagebox.showinfo("Success", "Processing complete!")
 
 def debug_function():
     """
@@ -791,7 +850,7 @@ def quit_application():
 
 
 # GUI Setup
-root = tk.Tk()
+root = TkinterDnD.Tk()  # Use TkinterDnD.Tk instead of tk.Tk
 root.title("VR funscript AI Generator")
 
 # Variables
@@ -984,14 +1043,138 @@ duration_combobox = ttk.Combobox(debug_frame, textvariable=debug_record_duration
 duration_combobox.grid(row=0, column=2, padx=5, pady=5)
 ttk.Label(debug_frame, text="seconds").grid(row=0, column=3, padx=5, pady=5)
 
+# Batch Processing Section
+batch_frame = ttk.LabelFrame(root, text="Batch Processing", padding=(10, 5))
+batch_frame.grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+# Create a frame for the buttons
+batch_button_frame = ttk.Frame(batch_frame)
+batch_button_frame.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+def add_files():
+    files = filedialog.askopenfilenames(
+        title="Select video files",
+        filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mkv")],
+    )
+    for file in files:
+        abs_path = os.path.abspath(file)
+        if abs_path not in global_state.batch_queue:
+            global_state.batch_queue.append(abs_path)
+            global_state.batch_status[abs_path] = "Queued"
+            update_batch_list()
+
+def remove_selected():
+    selection = batch_listbox.curselection()
+    for index in reversed(selection):
+        file = global_state.batch_queue[index]
+        global_state.batch_queue.pop(index)
+        if file in global_state.batch_status:
+            del global_state.batch_status[file]
+    update_batch_list()
+
+def clear_queue():
+    global_state.batch_queue.clear()
+    global_state.batch_status.clear()
+    update_batch_list()
+
+def update_batch_list():
+    batch_listbox.delete(0, tk.END)
+    for file in global_state.batch_queue:
+        status = global_state.batch_status.get(file, "Unknown")
+        filename = os.path.basename(file)
+        batch_listbox.insert(tk.END, f"{filename} - {status}")
+
+def start_batch():
+    if not global_state.batch_queue:
+        messagebox.showwarning("Warning", "No files in queue")
+        return
+    
+    if not global_state.batch_processing:
+        global_state.batch_processing = True
+        process_next_in_queue()
+
+def process_next_in_queue():
+    if not global_state.batch_processing or not global_state.batch_queue:
+        global_state.batch_processing = False
+        return
+
+    global_state.current_batch_index += 1
+    if global_state.current_batch_index >= len(global_state.batch_queue):
+        global_state.current_batch_index = -1
+        global_state.batch_processing = False
+        messagebox.showinfo("Complete", "Batch processing complete")
+        return
+
+    current_file = global_state.batch_queue[global_state.current_batch_index]
+    global_state.batch_status[current_file] = "Processing"
+    update_batch_list()
+    
+    # Set the current file as the video path
+    video_path.set(current_file)
+    
+    # Start processing this file
+    start_processing()
+
+# Add buttons to the button frame
+ttk.Button(batch_button_frame, text="Add Files", command=add_files).grid(row=0, column=0, padx=5, pady=5)
+ttk.Button(batch_button_frame, text="Remove Selected", command=remove_selected).grid(row=0, column=1, padx=5, pady=5)
+ttk.Button(batch_button_frame, text="Clear Queue", command=clear_queue).grid(row=0, column=2, padx=5, pady=5)
+ttk.Button(batch_button_frame, text="Start Batch", command=start_batch).grid(row=0, column=3, padx=5, pady=5)
+
+# Create and configure the listbox with scrollbar
+batch_list_frame = ttk.Frame(batch_frame)
+batch_list_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
+
+batch_listbox = tk.Listbox(batch_list_frame, height=6, selectmode=tk.EXTENDED)
+batch_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+scrollbar = ttk.Scrollbar(batch_list_frame, orient=tk.VERTICAL, command=batch_listbox.yview)
+scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+batch_listbox.configure(yscrollcommand=scrollbar.set)
+
+# Enable drag and drop
+def drop(event):
+    files = event.data.split()  # Split the data into individual file paths
+    for file in files:
+        # Remove curly braces if present (Windows paths)
+        file = file.strip('{}')
+        # Convert to absolute path
+        file = os.path.abspath(file)
+        if file.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+            if file not in global_state.batch_queue:
+                global_state.batch_queue.append(file)
+                global_state.batch_status[file] = "Queued"
+    update_batch_list()
+
+# Configure the listbox for drag and drop
+batch_listbox.drop_target_register(DND_FILES)
+batch_listbox.dnd_bind('<<Drop>>', drop)
+
 # Quit Button
 button_frame = ttk.Frame(root)
-button_frame.grid(row=5, column=0, columnspan=3, padx=5, pady=10)
+button_frame.grid(row=6, column=0, columnspan=3, padx=5, pady=10)
 
 ttk.Button(button_frame, text="Quit", command=quit_application).grid(row=0, column=2, padx=5, pady=5)
 
 # Footer
 footer_label = ttk.Label(root, text="Individual and personal use only.\nNot for commercial use.\nk00gar 2025 - https://github.com/ack00gar", font=("Arial", 10, "italic", "bold"), justify="center")
-footer_label.grid(row=6, column=0, columnspan=3, padx=5, pady=5)
+footer_label.grid(row=7, column=0, columnspan=3, padx=5, pady=5)
+
+def update_progress(progress, stage):
+    """Update the progress bars and status labels based on the current processing stage."""
+    if stage == "yolo":
+        yolo_progress_bar["value"] = progress
+        yolo_progress_percent.config(text=f"{progress:.0f}%")
+    elif stage == "tracking":
+        tracking_progress_bar["value"] = progress
+        tracking_progress_percent.config(text=f"{progress:.0f}%")
+    
+    if global_state.batch_processing:
+        current_file = global_state.batch_queue[global_state.current_batch_index]
+        global_state.batch_status[current_file] = f"Processing ({progress:.0f}%)"
+        update_batch_list()
+    
+    root.update_idletasks()
 
 root.mainloop()
