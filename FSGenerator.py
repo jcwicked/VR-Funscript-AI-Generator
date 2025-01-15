@@ -881,19 +881,21 @@ root.title("VR funscript AI Generator")
 # Variables
 video_path = tk.StringVar()
 reference_script_path = tk.StringVar()
-debug_mode_var = tk.BooleanVar()
-debug_record_mode_var = tk.BooleanVar()  # debug record mode
-live_display_mode_var = tk.BooleanVar()
-enhance_lighting_var = tk.BooleanVar()
+debug_mode_var = tk.BooleanVar(value=True)  # Default to True
+debug_record_mode_var = tk.BooleanVar(value=False)
 debug_record_duration_var = tk.StringVar(value="5")  # Default duration
-boost_enabled_var = tk.BooleanVar()
-boost_up_percent_var = tk.IntVar()
-boost_down_percent_var = tk.IntVar()
-threshold_enabled_var = tk.BooleanVar()
-threshold_low_var = tk.IntVar()
-threshold_high_var = tk.IntVar()
-vw_simplification_enabled_var = tk.BooleanVar()
-vw_factor_var = tk.DoubleVar()
+live_display_mode_var = tk.BooleanVar(value=False)
+enhance_lighting_var = tk.BooleanVar(value=False)
+
+# Funscript Tweaking Variables
+boost_enabled_var = tk.BooleanVar(value=True)  # Default to True
+boost_up_percent_var = tk.IntVar(value=10)  # Default 10%
+boost_down_percent_var = tk.IntVar(value=15)  # Default 15%
+threshold_enabled_var = tk.BooleanVar(value=True)  # Default to True
+threshold_low_var = tk.IntVar(value=10)  # Default 10
+threshold_high_var = tk.IntVar(value=90)  # Default 90
+vw_simplification_enabled_var = tk.BooleanVar(value=True)  # Default to True
+vw_factor_var = tk.DoubleVar(value=8.0)  # Default 8.0
 
 # Video File Selection
 video_frame = ttk.LabelFrame(root, text="Video Selection", padding=(10, 5))
@@ -944,9 +946,140 @@ current_file_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="e
 
 current_file_label = ttk.Label(current_file_frame, text="Current File:")
 current_file_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-
 current_file_status = ttk.Label(current_file_frame, text="None", wraplength=400)
 current_file_status.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+# Optional Settings Section
+optional_settings = ttk.LabelFrame(root, text="Optional settings", padding=(10, 5))
+optional_settings.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+# Collapse/Expand Button
+def toggle_optional_settings():
+    if optional_settings_collapsible.winfo_ismapped():
+        optional_settings_collapsible.grid_remove()
+    else:
+        optional_settings_collapsible.grid()
+
+toggle_button = ttk.Button(optional_settings, text="Toggle Optional Settings", command=toggle_optional_settings)
+toggle_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
+# Collapsible Section
+optional_settings_collapsible = ttk.Frame(optional_settings)
+optional_settings_collapsible.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+ttk.Label(optional_settings_collapsible, text="Frame Start:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+frame_start_entry = ttk.Entry(optional_settings_collapsible, width=10)
+frame_start_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+ttk.Label(optional_settings_collapsible, text="Frame End:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+frame_end_entry = ttk.Entry(optional_settings_collapsible, width=10)
+frame_end_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
+ttk.Label(optional_settings_collapsible, text="Reference Script:").grid(row=2, column=0, padx=5, pady=5)
+ttk.Entry(optional_settings_collapsible, textvariable=reference_script_path, width=50).grid(row=2, column=1, padx=5, pady=5)
+ttk.Button(optional_settings_collapsible, text="Browse", command=select_reference_script).grid(row=2, column=2, padx=5, pady=5)
+
+ttk.Checkbutton(optional_settings_collapsible, text="Enhance lighting", variable=enhance_lighting_var).grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+
+optional_settings_collapsible.grid_remove()
+
+# Funscript Tweaking Section
+funscript_tweaking_frame = ttk.LabelFrame(root, text="Funscript Tweaking", padding=(10, 5))
+funscript_tweaking_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+# Collapse/Expand Button
+def toggle_funscript_tweaking():
+    if funscript_tweaking_collapsible.winfo_ismapped():
+        funscript_tweaking_collapsible.grid_remove()
+    else:
+        funscript_tweaking_collapsible.grid()
+
+toggle_button = ttk.Button(funscript_tweaking_frame, text="Toggle Funscript Tweaking", command=toggle_funscript_tweaking)
+toggle_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
+# Collapsible Section
+funscript_tweaking_collapsible = ttk.Frame(funscript_tweaking_frame)
+funscript_tweaking_collapsible.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+# Boost Settings
+boost_frame = ttk.LabelFrame(funscript_tweaking_collapsible, text="Boost Settings", padding=(10, 5))
+boost_frame.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
+
+boost_checkbox = ttk.Checkbutton(boost_frame, text="Enable Boost", variable=boost_enabled_var, command=lambda: setattr(global_state, 'boost_enabled', not global_state.boost_enabled))
+boost_checkbox.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+boost_enabled_var.set(global_state.boost_enabled)
+
+ttk.Label(boost_frame, text="Boost Up %:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+boost_up_selector = ttk.Combobox(boost_frame, values=[str(i) for i in range(0, 21)], width=5)
+boost_up_selector.set(str(global_state.boost_up_percent))
+boost_up_selector.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+boost_up_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'boost_up_percent', int(boost_up_selector.get())))
+
+ttk.Label(boost_frame, text="Reduce Down %:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+boost_down_selector = ttk.Combobox(boost_frame, values=[str(i) for i in range(0, 21)], width=5)
+boost_down_selector.set(str(global_state.boost_down_percent))
+boost_down_selector.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+boost_down_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'boost_down_percent', int(boost_down_selector.get())))
+
+# Threshold Settings
+threshold_frame = ttk.LabelFrame(funscript_tweaking_collapsible, text="Threshold Settings", padding=(10, 5))
+threshold_frame.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+threshold_checkbox = ttk.Checkbutton(threshold_frame, text="Enable Threshold", variable=threshold_enabled_var, command=lambda: setattr(global_state, 'threshold_enabled', not global_state.threshold_enabled))
+threshold_checkbox.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+threshold_enabled_var.set(global_state.threshold_enabled)
+
+ttk.Label(threshold_frame, text="0 Threshold:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+threshold_low_selector = ttk.Combobox(threshold_frame, values=[str(i) for i in range(0, 16)], width=5)
+threshold_low_selector.set(str(global_state.threshold_low))
+threshold_low_selector.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+threshold_low_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'threshold_low', int(threshold_low_selector.get())))
+
+ttk.Label(threshold_frame, text="100 Threshold:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+threshold_high_selector = ttk.Combobox(threshold_frame, values=[str(i) for i in range(80, 101)], width=5)
+threshold_high_selector.set(str(global_state.threshold_high))
+threshold_high_selector.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+threshold_high_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'threshold_high', int(threshold_high_selector.get())))
+
+# Simplification Settings
+vw_frame = ttk.LabelFrame(funscript_tweaking_collapsible, text="Simplification", padding=(10, 5))
+vw_frame.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
+
+vw_checkbox = ttk.Checkbutton(vw_frame, text="Enable Simplification", variable=vw_simplification_enabled_var, command=lambda: setattr(global_state, 'vw_simplification_enabled', not global_state.vw_simplification_enabled))
+vw_checkbox.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+vw_simplification_enabled_var.set(global_state.vw_simplification_enabled)
+
+ttk.Label(vw_frame, text="VW Factor:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+vw_factor_selector = ttk.Combobox(vw_frame, values=[str(i / 5) for i in range(10, 51)], width=5)
+vw_factor_selector.set(str(global_state.vw_factor))
+vw_factor_selector.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+vw_factor_selector.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'vw_factor', float(vw_factor_selector.get())))
+
+ttk.Label(vw_frame, text="Rounding:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+rounding = ttk.Combobox(vw_frame, values=['5', '10'], width=5)
+rounding.set(str(global_state.rounding))
+rounding.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+rounding.bind("<<ComboboxSelected>>", lambda e: setattr(global_state, 'rounding', float(rounding.get())))
+
+# Regenerate Funscript Button
+regenerate_funscript_button = ttk.Button(funscript_tweaking_collapsible, text="Regenerate Funscript", command=lambda: regenerate_funscript(global_state))
+regenerate_funscript_button.grid(row=2, column=0, padx=5, pady=5, sticky="w")
+
+funscript_tweaking_collapsible.grid_remove()
+
+# Debug Record Mode
+debug_frame = ttk.LabelFrame(root, text="Debugging (Replay and navigate a processed video)", padding=(10, 5))
+debug_frame.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+
+quit_button = ttk.Button(debug_frame, text="Video (q to quit)", command=debug_function)
+quit_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+
+ttk.Checkbutton(debug_frame, text="Save debugging session as video", variable=debug_record_mode_var).grid(row=0, column=1, padx=5, pady=5)
+
+# Duration Selector
+duration_combobox = ttk.Combobox(debug_frame, textvariable=debug_record_duration_var, values=["5", "10", "20"], width=5)
+duration_combobox.grid(row=0, column=2, padx=5, pady=5)
+ttk.Label(debug_frame, text="seconds").grid(row=0, column=3, padx=5, pady=5)
 
 # Batch Processing Section
 batch_frame = ttk.LabelFrame(root, text="Batch Processing", padding=(10, 5))
