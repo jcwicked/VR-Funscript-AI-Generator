@@ -1221,16 +1221,53 @@ batch_listbox.configure(yscrollcommand=scrollbar.set)
 
 # Enable drag and drop
 def drop(event):
-    files = event.data.split()  # Split the data into individual file paths
-    for file in files:
-        # Remove curly braces if present (Windows paths)
-        file = file.strip('{}')
-        # Convert to absolute path
-        file = os.path.abspath(file)
-        if file.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
-            if file not in global_state.batch_queue:
-                global_state.batch_queue.append(file)
-                global_state.batch_status[file] = "Queued"
+    """Handle drag and drop of files, properly handling paths with spaces and special characters across platforms."""
+    # Get the raw data from the drop event
+    raw_data = event.data
+    current_mode = "VR" if global_state.isVR else "2D"
+    
+    # Process the raw data into a list of paths
+    if platform.system() == 'Windows':
+        # Windows: Handle paths with curly braces
+        if raw_data.startswith('{'):
+            # Split on '} {' to handle multiple files
+            paths = [p.strip('{}') for p in raw_data.split('} {')]
+        else:
+            paths = raw_data.split()
+    else:
+        # Unix/Mac: Paths are typically space-separated and may be quoted
+        paths = []
+        for path in raw_data.split():
+            # Remove any quotes
+            path = path.strip('"\'')
+            paths.append(path)
+
+    # Process each file
+    for file in paths:
+        try:
+            # Convert to absolute path and normalize
+            file = os.path.normpath(os.path.abspath(file))
+            
+            # Check if it's a video file
+            if file.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+                if file not in global_state.batch_queue:
+                    # Check if file exists and is readable
+                    try:
+                        with open(file, 'rb') as f:
+                            pass
+                        if validate_video_mode(file):
+                            global_state.batch_queue.append(file)
+                            global_state.batch_status[file] = "Queued"
+                            current_file_status.config(text=f"Added: {os.path.basename(file)}")
+                        else:
+                            current_file_status.config(text=f"Skipped {os.path.basename(file)} - Wrong video type for {current_mode} mode")
+                    except IOError as e:
+                        global_state.logger.error(f"Could not access file: {file} - {str(e)}")
+                        current_file_status.config(text=f"Error: Could not access {os.path.basename(file)}")
+        except Exception as e:
+            global_state.logger.error(f"Error processing dropped file: {str(e)}")
+            current_file_status.config(text=f"Error processing dropped file")
+            
     update_batch_list()
 
 # Configure the listbox for drag and drop
